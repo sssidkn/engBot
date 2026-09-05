@@ -158,7 +158,7 @@ func mentionHTML(u store.User) string {
 }
 
 func reminderMessage(u store.User, clock string) string {
-	return fmt.Sprintf("%s, время позаниматься английским ⏰\nНапоминание на <b>%s</b>. Отметь день в календаре или /done.",
+	return fmt.Sprintf("%s, Эй дебилкаааа смотри кого потеряла ⏰\nНапоминание на <b>%s</b>.",
 		mentionHTML(u), html.EscapeString(clock))
 }
 
