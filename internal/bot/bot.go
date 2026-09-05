@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"engbot/internal/dict"
 	"engbot/internal/store"
 
 	tele "gopkg.in/telebot.v3"
@@ -16,10 +17,11 @@ import (
 type App struct {
 	Bot   *tele.Bot
 	Store *store.Store
+	Dict  *dict.Client
 }
 
-func New(b *tele.Bot, s *store.Store) *App {
-	a := &App{Bot: b, Store: s}
+func New(b *tele.Bot, s *store.Store, d *dict.Client) *App {
+	a := &App{Bot: b, Store: s, Dict: d}
 	if b != nil {
 		b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
 			return func(c tele.Context) error {
@@ -54,14 +56,20 @@ func (a *App) register() {
 	a.Bot.Handle("/board", a.withUser(a.handleBoard))
 	a.Bot.Handle("/timezone", a.withUser(a.handleTimezone))
 	a.Bot.Handle("/remind", a.withUser(a.handleRemind))
+	a.Bot.Handle("/word", a.withUser(a.handleWord))
+	a.Bot.Handle("/w", a.withUser(a.handleWord))
+	a.Bot.Handle("/dict", a.withUser(a.handleWord))
+	a.Bot.Handle("/en", a.withUser(a.handleWord))
 	a.Bot.Handle("/here", a.withUser(a.handleHere))
 	a.Bot.Handle(tele.OnAddedToGroup, a.handleAddedToGroup)
+	a.Bot.Handle(tele.OnText, a.handlePlainText)
 
 	a.Bot.Handle(&tele.Btn{Unique: "chk_done"}, a.withUser(a.handleDone))
 	a.Bot.Handle(&tele.Btn{Unique: "chk_cal"}, a.withUser(a.handleCalendar))
 	a.Bot.Handle(&tele.Btn{Unique: "chk_streak"}, a.withUser(a.handleStreak))
 	a.Bot.Handle(&tele.Btn{Unique: "chk_stats"}, a.withUser(a.handleStats))
 	a.Bot.Handle(&tele.Btn{Unique: "chk_remind"}, a.withUser(a.handleRemindButton))
+	a.Bot.Handle(&tele.Btn{Unique: "chk_dict"}, a.withUser(a.handleDictButton))
 	a.Bot.Handle(&tele.Btn{Unique: calNavUnique}, a.withUser(a.handleCalNav))
 	a.Bot.Handle(&tele.Btn{Unique: calDayUnique}, a.withUser(a.handleCalDay))
 	a.Bot.Handle(&tele.Btn{Unique: calNoopUnique}, a.handleCalNoop)
@@ -83,16 +91,15 @@ func commandsHelp() string {
 		"/timezone Europe/Moscow — свой часовой пояс (от него зависит «сегодня» и напоминания)",
 		"/remind 09:00 — добавить напоминание (можно несколько времён)",
 		"/remind — список; /remind off — выключить все",
+		"/word run — словарь: все значения, контекст, примеры и уровень A1–C2",
 		"/here — отвечать в этой теме форума",
 		"",
-		"В чате с темами пиши команды внутри нужной темы — бот отвечает туда же.",
-		"Чтобы бот видел обычные сообщения, в BotFather выключите Group Privacy.",
 	}, "\n")
 }
 
 func menuText() string {
 	return "Привет! Это бот для занятий английским.\n\n" +
-		"Отмечай дни занятий в календаре: любой прошедший день можно поставить или снять. Посчитаю серию подряд и покажу пропуски.\n\n" +
+		"Отмечай дни занятий в календаре и смотри слова в словаре: /word hello или просто текст в личке.\n\n" +
 		"Можно писать в личку или добавить бота в общий чат: у каждого своя история, в группе есть таблица /board.\n\n" +
 		commandsHelp()
 }
@@ -104,10 +111,11 @@ func mainMenu() *tele.ReplyMarkup {
 	btnStreak := menu.Data("Серия 🔥", "chk_streak")
 	btnStats := menu.Data("Статистика 📊", "chk_stats")
 	btnRemind := menu.Data("Напоминания ⏰", "chk_remind")
+	btnDict := menu.Data("Словарь 📖", "chk_dict")
 	menu.Inline(
 		menu.Row(btnDone),
 		menu.Row(btnCal, btnStreak, btnStats),
-		menu.Row(btnRemind),
+		menu.Row(btnRemind, btnDict),
 	)
 	return menu
 }

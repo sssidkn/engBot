@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	appbot "engbot/internal/bot"
+	"engbot/internal/dict"
 	"engbot/internal/store"
 
 	"github.com/joho/godotenv"
@@ -19,6 +21,12 @@ import (
 const placeholderToken = "123456:ABC-your-token-from-BotFather"
 
 func main() {
+	logFile, err := setupLogging("engBot.log")
+	if err != nil {
+		log.Fatalf("не удалось открыть лог-файл: %v", err)
+	}
+	defer logFile.Close()
+
 	loadEnv()
 	token := strings.TrimSpace(os.Getenv("BOT_TOKEN"))
 	if !tokenOK(token) {
@@ -44,15 +52,46 @@ func main() {
 		log.Fatal(err)
 	}
 
-	app := appbot.New(b, st)
+	app := appbot.New(b, st, newDictClient(dbPath))
 	go app.RunReminders()
+	go runBackupLoop(dbPath, tz)
+	if strings.TrimSpace(os.Getenv("GROQ_API_KEY")) != "" {
+		log.Print("словарь: Groq включён")
+	} else {
+		log.Print("словарь: нет GROQ_API_KEY, значения будут короче")
+	}
 	log.Printf("бот запущен, база %s, пояс %s", dbPath, tz)
 	b.Start()
+}
+
+func newDictClient(dbPath string) *dict.Client {
+	c := dict.New(nil)
+	c.GroqKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
+	c.GroqModel = getenv("GROQ_MODEL", "")
+	if dir := filepath.Dir(dbPath); dir != "" {
+		c.CachePath = filepath.Join(dir, "wordcache.json")
+	}
+	return c
 }
 
 func tokenOK(token string) bool {
 	token = strings.TrimSpace(token)
 	return token != "" && token != placeholderToken
+}
+
+func setupLogging(path string) (io.Closer, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "engBot.log"
+	}
+	w, err := newLogRotator(path, defaultLogMaxBytes, defaultLogKeep)
+	if err != nil {
+		return nil, err
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, w))
+	log.SetFlags(log.Ldate | log.Ltime)
+	log.Printf("логи пишутся в %s (ротация по дню и при размере > %d байт, хранить %d архивов)", path, defaultLogMaxBytes, defaultLogKeep)
+	return w, nil
 }
 
 func getenv(k, def string) string {

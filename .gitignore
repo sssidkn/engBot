@@ -2,3 +2,5 @@
 data/
 *.exe
 /bot
+engBot.log
+*.log

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,34 @@ func TestFindEnvFileNoneInIsolatedTree(t *testing.T) {
 	}
 	if rel, err := filepath.Rel(dir, got); err == nil && !strings.HasPrefix(rel, "..") {
 		t.Fatalf("unexpected env file inside isolated dir: %s", got)
+	}
+}
+
+func TestSetupLoggingWritesFile(t *testing.T) {
+	prev := log.Writer()
+	flags := log.Flags()
+	t.Cleanup(func() {
+		log.SetOutput(prev)
+		log.SetFlags(flags)
+	})
+	path := filepath.Join(t.TempDir(), "engBot.log")
+	f, err := setupLogging(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Print("hello-log-test")
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "hello-log-test") {
+		t.Fatalf("log file missing line: %s", got)
+	}
+	if !strings.Contains(string(got), "логи пишутся") {
+		t.Fatalf("log file missing setup line: %s", got)
 	}
 }
 
