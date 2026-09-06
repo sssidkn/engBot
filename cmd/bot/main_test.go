@@ -76,10 +76,9 @@ func TestSetupLoggingWritesFile(t *testing.T) {
 		log.SetFlags(flags)
 	})
 	path := filepath.Join(t.TempDir(), "engBot.log")
-	f, err := setupLogging(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("LOG_PATH", path)
+	t.Setenv("DATA_DIR", t.TempDir())
+	f := setupLogging()
 	log.Print("hello-log-test")
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
@@ -93,6 +92,48 @@ func TestSetupLoggingWritesFile(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "логи пишутся") {
 		t.Fatalf("log file missing setup line: %s", got)
+	}
+}
+
+func TestResolveDBPath(t *testing.T) {
+	t.Setenv("DATABASE_PATH", "/app/data/engbot.json")
+	if got := resolveDBPath(); got != "/app/data/engbot.json" {
+		t.Fatalf("got %s", got)
+	}
+	t.Setenv("DATABASE_PATH", "")
+	dir := t.TempDir()
+	t.Setenv("DATA_DIR", dir)
+	got := resolveDBPath()
+	if filepath.Base(got) != "engbot.json" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestSetupLoggingFallsBack(t *testing.T) {
+	prev := log.Writer()
+	flags := log.Flags()
+	t.Cleanup(func() {
+		log.SetOutput(prev)
+		log.SetFlags(flags)
+	})
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOG_PATH", filepath.Join(blocked, "engBot.log"))
+	t.Setenv("DATA_DIR", filepath.Join(blocked, "data"))
+	f := setupLogging()
+	if f == nil {
+		t.Fatal("expected closer")
+	}
+	_ = f.Close()
+}
+
+func TestBotTokenAliases(t *testing.T) {
+	t.Setenv("BOT_TOKEN", "")
+	t.Setenv("TELEGRAM_BOT_TOKEN", "123456:from-alias")
+	if got := botToken(); got != "123456:from-alias" {
+		t.Fatalf("got %q", got)
 	}
 }
 

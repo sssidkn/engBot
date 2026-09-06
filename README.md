@@ -66,3 +66,18 @@ go run ./cmd/bot
 ```
 
 Отметки хранятся в JSON-файле `data/engbot.json` (путь можно сменить через `DATABASE_PATH`).
+
+## Bothost (Docker)
+
+В корне репозитория есть `Dockerfile` под [Bothost](https://bothost.ru/docs/custom-dockerfile): бинарник в `/usr/local/bin/engbot` (вне `/app`, чтобы его не перекрыл mount с Git), база и логи в `/app/data`.
+
+1. Залей код на GitHub (`master` / `main`).
+2. На Bothost создай бота, укажи репозиторий и ветку.
+3. Включи **«Использовать собственный Dockerfile»**.
+4. Секреты — только в переменных окружения панели, не в Git:
+   - `BOT_TOKEN` (часто подставляется из поля токена)
+   - `GROQ_API_KEY` (если нужен подробный `/word`)
+   - при необходимости `HTTPS_PROXY` / `HTTP_PROXY`
+5. Внутренний порт `8080` (health `GET /` → `ok`). Long polling, webhook не обязателен.
+
+Без `.env` бот стартует: читает env, если лог или база недоступны — пишет в stderr и `/tmp`.

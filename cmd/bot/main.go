@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,32 +22,37 @@ import (
 const placeholderToken = "123456:ABC-your-token-from-BotFather"
 
 func main() {
-	logFile, err := setupLogging("engBot.log")
-	if err != nil {
-		log.Fatalf("не удалось открыть лог-файл: %v", err)
-	}
+	loadEnv()
+	logFile := setupLogging()
 	defer logFile.Close()
 
-	loadEnv()
-	token := strings.TrimSpace(os.Getenv("BOT_TOKEN"))
+	token := botToken()
 	if !tokenOK(token) {
-		log.Fatal("нет токена. Скопируй .env.example в .env и вставь BOT_TOKEN от @BotFather")
+		log.Fatal("нет BOT_TOKEN в окружении или .env")
 	}
-	dbPath := getenv("DATABASE_PATH", "data/engbot.json")
+	dbPath := resolveDBPath()
 	tz := getenv("DEFAULT_TZ", "Europe/Moscow")
 	if _, err := time.LoadLocation(tz); err != nil {
-		log.Fatalf("DEFAULT_TZ: %v", err)
+		log.Printf("DEFAULT_TZ %q некорректен, беру Europe/Moscow: %v", tz, err)
+		tz = "Europe/Moscow"
 	}
 
 	st, err := store.Open(dbPath, tz)
 	if err != nil {
-		log.Fatal(err)
+		fallback := filepath.Join(os.TempDir(), "engbot-data", "engbot.json")
+		log.Printf("база %s недоступна (%v), пробую %s", dbPath, err, fallback)
+		st, err = store.Open(fallback, tz)
+		if err != nil {
+			log.Fatal(err)
+		}
+		dbPath = fallback
 	}
 	defer st.Close()
 
 	b, err := tele.NewBot(tele.Settings{
 		Token:  token,
-		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		Poller: &tele.LongPoller{Timeout: 15 * time.Second},
+		Client: telegramHTTPClient(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -60,17 +66,81 @@ func main() {
 	} else {
 		log.Print("словарь: нет GROQ_API_KEY, значения будут короче")
 	}
+	serveHealth()
 	log.Printf("бот запущен, база %s, пояс %s", dbPath, tz)
 	b.Start()
 }
+
+func telegramHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 90 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			TLSHandshakeTimeout:   20 * time.Second,
+			ResponseHeaderTimeout: 45 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+}
+
+func serveHealth() {
+	port := getenv("PORT", "")
+	if port == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	addr := "0.0.0.0:" + port
+	go func() {
+		log.Printf("health http %s", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Printf("health http: %v", err)
+		}
+	}()
+}
+
+func botToken() string {
+	for _, k := range []string{"BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(k)); tokenOK(v) {
+			return v
+		}
+	}
+	return strings.TrimSpace(os.Getenv("BOT_TOKEN"))
+}
+
+func resolveDataDir() string {
+	if d := getenv("DATA_DIR", ""); d != "" {
+		return d
+	}
+	if st, err := os.Stat("/app/data"); err == nil && st.IsDir() {
+		return "/app/data"
+	}
+	return "data"
+}
+
+func resolveDBPath() string {
+	if p := getenv("DATABASE_PATH", ""); p != "" {
+		return p
+	}
+	return filepath.Join(resolveDataDir(), "engbot.json")
+}
+
+type nopCloser struct{}
+
+func (nopCloser) Close() error { return nil }
 
 func newDictClient(dbPath string) *dict.Client {
 	c := dict.New(nil)
 	c.GroqKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
 	c.GroqModel = getenv("GROQ_MODEL", "")
-	if dir := filepath.Dir(dbPath); dir != "" {
-		c.CachePath = filepath.Join(dir, "wordcache.json")
+	dir := filepath.Dir(dbPath)
+	if dir == "." || dir == "" {
+		dir = resolveDataDir()
 	}
+	c.CachePath = filepath.Join(dir, "wordcache.json")
 	return c
 }
 
@@ -79,19 +149,39 @@ func tokenOK(token string) bool {
 	return token != "" && token != placeholderToken
 }
 
-func setupLogging(path string) (io.Closer, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = "engBot.log"
-	}
-	w, err := newLogRotator(path, defaultLogMaxBytes, defaultLogKeep)
-	if err != nil {
-		return nil, err
-	}
-	log.SetOutput(io.MultiWriter(os.Stderr, w))
+func setupLogging() io.Closer {
 	log.SetFlags(log.Ldate | log.Ltime)
-	log.Printf("логи пишутся в %s (ротация по дню и при размере > %d байт, хранить %d архивов)", path, defaultLogMaxBytes, defaultLogKeep)
-	return w, nil
+	var candidates []string
+	if p := getenv("LOG_PATH", ""); p != "" {
+		candidates = append(candidates, p)
+	}
+	candidates = append(candidates,
+		filepath.Join(resolveDataDir(), "engBot.log"),
+		"engBot.log",
+		filepath.Join(os.TempDir(), "engBot.log"),
+	)
+	seen := map[string]struct{}{}
+	for _, path := range candidates {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		w, err := newLogRotator(path, defaultLogMaxBytes, defaultLogKeep)
+		if err != nil {
+			log.Printf("лог-файл %s недоступен: %v", path, err)
+			continue
+		}
+		log.SetOutput(io.MultiWriter(os.Stderr, w))
+		log.Printf("логи пишутся в %s (ротация по дню и при размере > %d байт, хранить %d архивов)", path, defaultLogMaxBytes, defaultLogKeep)
+		return w
+	}
+	log.SetOutput(os.Stderr)
+	log.Print("лог-файл недоступен, пишу только в stderr")
+	return nopCloser{}
 }
 
 func getenv(k, def string) string {

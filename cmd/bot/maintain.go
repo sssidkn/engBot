@@ -45,9 +45,13 @@ func (w *logRotator) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.rotateIfNeeded(); err != nil {
-		return 0, err
+		return os.Stderr.Write(p)
 	}
-	return w.file.Write(p)
+	n, err := w.file.Write(p)
+	if err != nil {
+		return os.Stderr.Write(p)
+	}
+	return n, nil
 }
 
 func (w *logRotator) Close() error {
@@ -185,7 +189,7 @@ func backupDB(dbPath, locName string) (string, bool, error) {
 	defer src.Close()
 
 	dir := filepath.Join(filepath.Dir(dbPath), "backup")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return "", false, err
 	}
 	dstPath := filepath.Join(dir, "engbot-"+day+".json")

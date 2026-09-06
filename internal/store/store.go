@@ -69,7 +69,7 @@ type MemberRow struct {
 func Open(path, defaultTZ string) (*Store, error) {
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o777); err != nil {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
